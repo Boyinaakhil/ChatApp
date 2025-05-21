@@ -1,4 +1,5 @@
-const socket = io('ws://localhost:3500')
+// Corrected Socket.IO client connection URL (no 'ws://' protocol)
+const socket = io('http://localhost:3500')
 
 const msgInput = document.querySelector('#message')
 const nameInput = document.querySelector('#name')
@@ -60,8 +61,7 @@ socket.on("message", (data) => {
     } else {
         li.innerHTML = `<div class="post__text">${text}</div>`
     }
-    document.querySelector('.chat-display').appendChild(li)
-
+    chatDisplay.appendChild(li)
     chatDisplay.scrollTop = chatDisplay.scrollHeight
 })
 
