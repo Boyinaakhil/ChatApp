@@ -1,175 +1,148 @@
-import express from 'express'
-import { Server } from "socket.io"
-import path from 'path'
-import { fileURLToPath } from 'url'
+import express from 'express';
+import { Server } from 'socket.io';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import http from 'http';
+import dotenv from 'dotenv';
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+dotenv.config();
 
-const PORT = process.env.PORT || 3500
-const ADMIN = "Admin"
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const app = express()
+const PORT = process.env.PORT || 3500;
+const ADMIN = 'Admin';
 
-app.use(express.static(path.join(__dirname, "public")))
+const app = express();
+const server = http.createServer(app);
 
-const expressServer = app.listen(PORT, () => {
-    console.log(`listening on port ${PORT}`)
-})
+// Serve static files from /public (for frontend)
+app.use(express.static(path.join(__dirname, 'public')));
 
-// state 
+// SPA fallback for frontend routers like React Router (optional)
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+const io = new Server(server, {
+  cors: {
+    origin: process.env.NODE_ENV === 'production'
+      ? false
+      : ['http://localhost:5500', 'http://127.0.0.1:5500'],
+  },
+});
+
+// ==== Chat State ====
 const UsersState = {
-    users: [],
-    setUsers: function (newUsersArray) {
-        this.users = newUsersArray
+  users: [],
+  setUsers(newUsersArray) {
+    this.users = newUsersArray;
+  },
+};
+
+// ==== Socket Events ====
+io.on('connection', (socket) => {
+  console.log(`User ${socket.id} connected`);
+  socket.emit('message', buildMsg(ADMIN, 'Welcome to Chat App!'));
+
+  socket.on('enterRoom', ({ name, room }) => {
+    const prevRoom = getUser(socket.id)?.room;
+
+    if (prevRoom) {
+      socket.leave(prevRoom);
+      io.to(prevRoom).emit('message', buildMsg(ADMIN, `${name} has left the room`));
     }
-}
 
-const io = new Server(expressServer, {
-    cors: {
-        origin: process.env.NODE_ENV === "production" ? false : ["http://localhost:5500", "http://127.0.0.1:5500"]
+    const user = activateUser(socket.id, name, room);
+
+    if (prevRoom) {
+      io.to(prevRoom).emit('userList', {
+        users: getUsersInRoom(prevRoom),
+      });
     }
-})
 
-io.on('connection', socket => {
-    console.log(`User ${socket.id} connected`)
+    socket.join(user.room);
 
-    // Upon connection - only to user 
-    socket.emit('message', buildMsg(ADMIN, "Welcome to Chat App!"))
+    socket.emit('message', buildMsg(ADMIN, `You have joined the ${user.room} chat room`));
+    socket.broadcast.to(user.room).emit('message', buildMsg(ADMIN, `${user.name} has joined the room`));
 
-    socket.on('enterRoom', ({ name, room }) => {
+    io.to(user.room).emit('userList', {
+      users: getUsersInRoom(user.room),
+    });
 
-        // leave previous room 
-        const prevRoom = getUser(socket.id)?.room
+    io.emit('roomList', {
+      rooms: getAllActiveRooms(),
+    });
+  });
 
-        if (prevRoom) {
-            socket.leave(prevRoom)
-            io.to(prevRoom).emit('message', buildMsg(ADMIN, `${name} has left the room`))
-        }
+  socket.on('disconnect', () => {
+    const user = getUser(socket.id);
+    userLeavesApp(socket.id);
 
-        const user = activateUser(socket.id, name, room)
+    if (user) {
+      io.to(user.room).emit('message', buildMsg(ADMIN, `${user.name} has left the room`));
+      io.to(user.room).emit('userList', {
+        users: getUsersInRoom(user.room),
+      });
+      io.emit('roomList', {
+        rooms: getAllActiveRooms(),
+      });
+    }
 
-        // Cannot update previous room users list until after the state update in activate user 
-        if (prevRoom) {
-            io.to(prevRoom).emit('userList', {
-                users: getUsersInRoom(prevRoom)
-            })
-        }
+    console.log(`User ${socket.id} disconnected`);
+  });
 
-        // join room 
-        socket.join(user.room)
+  socket.on('message', ({ name, text }) => {
+    const room = getUser(socket.id)?.room;
+    if (room) {
+      io.to(room).emit('message', buildMsg(name, text));
+    }
+  });
 
-        // To user who joined 
-        socket.emit('message', buildMsg(ADMIN, `You have joined the ${user.room} chat room`))
+  socket.on('activity', (name) => {
+    const room = getUser(socket.id)?.room;
+    if (room) {
+      socket.broadcast.to(room).emit('activity', name);
+    }
+  });
+});
 
-        // To everyone else 
-        socket.broadcast.to(user.room).emit('message', buildMsg(ADMIN, `${user.name} has joined the room`))
-
-        // Update user list for room 
-        io.to(user.room).emit('userList', {
-            users: getUsersInRoom(user.room)
-        })
-
-        // Update rooms list for everyone 
-        io.emit('roomList', {
-            rooms: getAllActiveRooms()
-        })
-    })
-
-    // When user disconnects - to all others 
-    socket.on('disconnect', () => {
-        const user = getUser(socket.id)
-        userLeavesApp(socket.id)
-
-        if (user) {
-            io.to(user.room).emit('message', buildMsg(ADMIN, `${user.name} has left the room`))
-
-            io.to(user.room).emit('userList', {
-                users: getUsersInRoom(user.room)
-            })
-
-            io.emit('roomList', {
-                rooms: getAllActiveRooms()
-            })
-        }
-
-        console.log(`User ${socket.id} disconnected`)
-    })
-
-    // Listening for a message event 
-    socket.on('message', ({ name, text }) => {
-        const room = getUser(socket.id)?.room
-        if (room) {
-            io.to(room).emit('message', buildMsg(name, text))
-        }
-    })
-
-    // Listen for activity 
-    socket.on('activity', (name) => {
-        const room = getUser(socket.id)?.room
-        if (room) {
-            socket.broadcast.to(room).emit('activity', name)
-        }
-    })
-})
-
+// ==== Helper Functions ====
 function buildMsg(name, text) {
-    return {
-        name,
-        text,
-        time: new Intl.DateTimeFormat('default', {
-            hour: 'numeric',
-            minute: 'numeric',
-            second: 'numeric'
-        }).format(new Date())
-    }
+  return {
+    name,
+    text,
+    time: new Intl.DateTimeFormat('default', {
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+    }).format(new Date()),
+  };
 }
 
-// User functions 
 function activateUser(id, name, room) {
-    const user = { id, name, room }
-    UsersState.setUsers([
-        ...UsersState.users.filter(user => user.id !== id),
-        user
-    ])
-    return user
+  const user = { id, name, room };
+  UsersState.setUsers([
+    ...UsersState.users.filter((user) => user.id !== id),
+    user,
+  ]);
+  return user;
 }
 
 function userLeavesApp(id) {
-    UsersState.setUsers(
-        UsersState.users.filter(user => user.id !== id)
-    )
+  UsersState.setUsers(UsersState.users.filter((user) => user.id !== id));
 }
 
 function getUser(id) {
-    return UsersState.users.find(user => user.id === id)
+  return UsersState.users.find((user) => user.id === id);
 }
 
 function getUsersInRoom(room) {
-    return UsersState.users.filter(user => user.room === room)
+  return UsersState.users.filter((user) => user.room === room);
 }
 
 function getAllActiveRooms() {
-    return Array.from(new Set(UsersState.users.map(user => user.room)))
+  return Array.from(new Set(UsersState.users.map((user) => user.room)));
 }
-// import { createServer } from "http"
-// import { Server } from "socket.io"
 
-// const httpServer = createServer()
-
-// const io = new Server(httpServer, {
-//     cors: {
-//         origin: process.env.NODE_ENV === "production" ? false : ["http://localhost:5200", "http://127.0.0.1:5200"]
-//     }
-// })
-
-// io.on('connection', socket => {
-//     console.log(`User ${socket.id} connected`)
-
-//     socket.on('message', data => {
-//         console.log(data)
-//         io.emit('message', `${socket.id.substring(0, 5)}: ${data}`)
-//     })
-// })
-
-// httpServer.listen(3500, () => console.log('listening on port 3500'))
+server.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
