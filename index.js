@@ -16,14 +16,15 @@ const ADMIN = 'Admin';
 const app = express();
 const server = http.createServer(app);
 
-// Serve static files from /public (for frontend)
+// Static middleware to serve frontend from /public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
-// SPA fallback for frontend routers like React Router (optional)
+// ** Important: use relative route here — not full URLs **
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// Setup Socket.io with CORS origin whitelist
 const io = new Server(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production'
@@ -32,7 +33,7 @@ const io = new Server(server, {
   },
 });
 
-// ==== Chat State ====
+// Chat users state
 const UsersState = {
   users: [],
   setUsers(newUsersArray) {
@@ -40,7 +41,7 @@ const UsersState = {
   },
 };
 
-// ==== Socket Events ====
+// Socket.io events
 io.on('connection', (socket) => {
   console.log(`User ${socket.id} connected`);
   socket.emit('message', buildMsg(ADMIN, 'Welcome to Chat App!'));
@@ -107,7 +108,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// ==== Helper Functions ====
+// Helper functions
 function buildMsg(name, text) {
   return {
     name,
